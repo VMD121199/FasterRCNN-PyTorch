@@ -4,9 +4,10 @@ import os
 import numpy as np
 import yaml
 import random
+from model.swin_faster_rcnn import SwinFasterRCNN
 from model.faster_rcnn import FasterRCNN
 from tqdm import tqdm
-from dataset.voc import VOCDataset
+from dataset.vedai import VEDAIDataset
 from torch.utils.data.dataloader import DataLoader
 from torch.optim.lr_scheduler import MultiStepLR
 
@@ -21,6 +22,13 @@ def train(args):
         except yaml.YAMLError as exc:
             print(exc)
     print(config)
+    # load swin config if provided
+    with open(args.swin_config, 'r') as file:
+        try:
+            swin_config = yaml.safe_load(file)
+        except yaml.YAMLError as exc:
+            print(exc)
+    print(swin_config)
     ########################
     
     dataset_config = config['dataset_params']
@@ -34,16 +42,18 @@ def train(args):
     if device == 'cuda':
         torch.cuda.manual_seed_all(seed)
     
-    voc = VOCDataset('train',
+    ved = VEDAIDataset('train',
                      im_dir=dataset_config['im_train_path'],
                      ann_dir=dataset_config['ann_train_path'])
-    train_dataset = DataLoader(voc,
+    train_dataset = DataLoader(ved,
                                batch_size=1,
                                shuffle=True,
                                num_workers=4)
     
-    faster_rcnn_model = FasterRCNN(model_config,
+    faster_rcnn_model = SwinFasterRCNN(model_config, swin_config,
                                    num_classes=dataset_config['num_classes'])
+    # faster_rcnn_model = FasterRCNN(model_config, num_classes=dataset_config['num_classes'])
+
     faster_rcnn_model.train()
     faster_rcnn_model.to(device)
 
@@ -71,8 +81,11 @@ def train(args):
             im = im.float().to(device)
             target['bboxes'] = target['bboxes'].float().to(device)
             target['labels'] = target['labels'].long().to(device)
-            rpn_output, frcnn_output = faster_rcnn_model(im, target)
-            
+            try:
+                rpn_output, frcnn_output = faster_rcnn_model(im, target)
+            except:
+                print('Error in image: {}'.format(fname))
+                continue        
             rpn_loss = rpn_output['rpn_classification_loss'] + rpn_output['rpn_localization_loss']
             frcnn_loss = frcnn_output['frcnn_classification_loss'] + frcnn_output['frcnn_localization_loss']
             loss = rpn_loss + frcnn_loss
@@ -105,6 +118,8 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Arguments for faster rcnn training')
     parser.add_argument('--config', dest='config_path',
-                        default='config/voc.yaml', type=str)
+                        default='config/vedai.yaml', type=str)
+    parser.add_argument('--swin_config', dest='swin_config',
+                        default='', type=str)
     args = parser.parse_args()
     train(args)

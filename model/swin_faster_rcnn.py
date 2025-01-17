@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import math
+from model.swintransformer import build_swin
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -16,7 +17,6 @@ def get_iou(boxes1, boxes2):
     # Area of boxes (x2-x1)*(y2-y1)
     area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])  # (N,)
     area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])  # (M,)
-    
     # Get top left x1,y1 coordinate
     x_left = torch.max(boxes1[:, None, 0], boxes2[:, 0])  # (N, M)
     y_top = torch.max(boxes1[:, None, 1], boxes2[:, 1])  # (N, M)
@@ -480,6 +480,7 @@ class RegionProposalNetwork(nn.Module):
             labels_for_anchors, matched_gt_boxes_for_anchors = self.assign_targets_to_anchors(
                 anchors,
                 target['bboxes'][0])
+            
             # Based on gt assignment above, get regression target for the anchors
             # matched_gt_boxes_for_anchors -> (Number of anchors in image, 4)
             # anchors -> (Number of anchors in image, 4)
@@ -739,20 +740,16 @@ class ROIHead(nn.Module):
         return pred_boxes, pred_labels, pred_scores
 
 
-class FasterRCNN(nn.Module):
-    def __init__(self, model_config, num_classes):
-        super(FasterRCNN, self).__init__()
+class SwinFasterRCNN(nn.Module):
+    def __init__(self, model_config, swinconfig, num_classes):
+        super(SwinFasterRCNN, self).__init__()
         self.model_config = model_config
-        vgg16 = torchvision.models.vgg16(pretrained=True)
-        self.backbone = vgg16.features[:-1]
+        self.backbone = build_swin(swinconfig)
         self.rpn = RegionProposalNetwork(model_config['backbone_out_channels'],
                                          scales=model_config['scales'],
                                          aspect_ratios=model_config['aspect_ratios'],
                                          model_config=model_config)
         self.roi_head = ROIHead(model_config, num_classes, in_channels=model_config['backbone_out_channels'])
-        for layer in self.backbone[:10]:
-            for p in layer.parameters():
-                p.requires_grad = False
         self.image_mean = [0.485, 0.456, 0.406]
         self.image_std = [0.229, 0.224, 0.225]
         self.min_size = model_config['min_im_size']
@@ -787,7 +784,7 @@ class FasterRCNN(nn.Module):
             align_corners=False,
         )
 
-        if bboxes is not None:
+        if bboxes is not None and len(bboxes[0]) > 0:
             # Resize boxes by
             ratios = [
                 torch.tensor(s, dtype=torch.float32, device=bboxes.device)
@@ -814,7 +811,6 @@ class FasterRCNN(nn.Module):
         
         # Call backbone
         feat = self.backbone(image)
-        
         # Call RPN and get proposals
         rpn_output = self.rpn(image, feat, target)
         proposals = rpn_output['proposals']
